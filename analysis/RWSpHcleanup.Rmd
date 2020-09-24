@@ -1,0 +1,198 @@
+---
+title: "RWS pH data product"
+author: "Karline Soetaert, Willem Stolte, Sylvana Birchenough"
+date: "16-6-2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Cleaning up RWS pH data
+
+Here we document the cleanup of the RWS (Rijkswaterstaat) data in the Dutch area of the North Sea. 
+Data were downloaded as described in document *RWSpHretrieval*.
+
+For this document, the data were retrieved from RWS at 17-6-2020, and stored as separate files in directory "data/raw_data".
+
+The datasets contain a lot of redundant columns and the column names and data are in Dutch. 
+
+So the data need to be tidied and translated.
+
+All files are read and binded row-wise to one data set.
+
+Only values are kept where quality code = 0. Some negative values are also excluded.
+
+```{r}
+path <- "../data/raw_data/"
+ListFiles <- paste(path, list.files(path = path, pattern = "csv"), sep = "") # list of all files
+
+ALL <- NULL
+for (File in ListFiles)
+  ALL <- rbind(ALL, read.table(File, header = TRUE))
+
+nDat <- nrow(ALL)
+
+ALL <- ALL[ALL$kwaliteitswaarde.code == 0,]
+ALL <- ALL[ALL$numeriekewaarde > 0,]
+```
+
+A selection of columns is kept (ToKeep), and translated (NewName)
+
+```{r}
+# Columns that contain useful information
+ToKeep <- c("locatie.message.id", "locatie.code", "locatie.naam",
+  "geometriepunt.x", "geometriepunt.y", "referentievlak", "tijdstip", 
+  "bemonsteringsapparaat.omschrijving", "meetapparaat.omschrijving", 
+  "waardebepalingsmethode.omschrijving", "numeriekewaarde")
+
+# Same but in english
+NewName <- c("station.id", "station.code", "station.name",
+  "coord.x", "coord.y", "vertical.pos", "time", 
+  "sampling.method", "measurement.device", 
+  "measurement.method", "value")
+
+# subset the data 
+pHdata <- ALL[,ToKeep]
+colnames(pHdata) <- NewName
+```
+
+A function is created to translate from dutch names to english.
+
+```{r}
+Replace <- function(Vec, from, to){
+  Vec <- as.character(Vec)
+  for (i in 1:length(from))
+    Vec[Vec == as.character(from[i])] <- as.character(to[i])
+  as.factor(Vec)
+}
+
+pHdata$vertical.pos <- Replace(pHdata$vertical.pos, 
+   from = c("WATSGL", "BODM", "HALVWTKL", "NVT", "SPRONGLG"),
+   to   = c("surface", "bottom", "mid-depth", "NA", "pycnocline"))
+
+pHdata$sampling.method <- Replace(pHdata$sampling.method,
+   from = c("Pomp", "Waarde is niet van toepassing", "Emmer"),
+   to   = c("pump", "NA", "bucket"))
+
+pHdata$measurement.device <- Replace(pHdata$measurement.device,
+   from = c("pH meter", "Waarde is niet van toepassing", "Secchi schijf",
+            "Geleidendheid- en temperatuursensor"),
+   to   = c("pH meter",  "NA", "secchi disk", 
+            "conductivity, temperaure sensor"))
+
+pHdata$measurement.method <- Replace(pHdata$measurement.method,
+from = c("Alkaliteit mbv titratie", 
+  "Bepaling van de pH met behulp van een glaselectrode",        
+  "Bepaling van de zuurgraad in water",  "Niet genormaliseerde zintuiglijke waardebepaling",           
+  "RWSV 913.00.W006", "913.00.W015, Bepaling fysisch-chemische veldparameters",     
+  "Bep. pH,O2,T,SALNTT stand.meth.exam.(waste)water(APHA 2005)", "Onbekend",
+  "MdSV Sea-Bird Electronics 911 plus system (913.03.W001)", "Fysische bepaling volgens RIZA nota 87-022",
+  "Zicht bepaling", "pH bepaling", "Bepaling pH"), 
+to = c("alkality titration", "pH glass electrode", "acidity",  "unnormalised sensory determination",           
+  "RWSV 913.00.W006", "913.00.W015, physical-chemical parameters",     
+  "pH  (waste)water(APHA 2005)", "Unknown", "MdSV Sea-Bird Electronics 911 plus system (913.03.W001)", 
+  "physical measurement according to RIZA nota 87-022", "visual determination", "pH", "pH"))
+```
+
+the time strings are converted to POSIXct. 
+
+```{r}
+ TT <- gsub(x = pHdata$time, "T", " ")
+ TT <- gsub(x = TT, "Z", "")
+ 
+ pHdata$time <- as.POSIXct(TT)
+``` 
+ 
+Stations information is added as an attribute to avoid too much redundancy in the final table
+
+```{r}
+Stations <- with (pHdata, unique(data.frame(station.id, 
+    station.code, station.name, coord.x, coord.y)))
+
+attr(pHdata, "Stations") <- Stations
+
+pHdata <- pHdata[ , !colnames(pHdata) %in% c("station.id", "station.name")]
+```
+
+The cleaned data set is written to file "pHdata.rds".
+
+```{r}
+save(file = "../data/derived_data/R/pHdata.rds", pHdata)
+write.csv(file = "../data/derived_data/text/pHdata.csv", pHdata)
+write.csv(file = "../data/derived_data/text/pHstations.csv", Stations)
+```
+
+Of the original `r nDat` datapoints, `r nrow(pHdata)` were retained in the pH data set, belonging to `r nrow(Stations)` stations. The first measurement was taken at `r min(pHdata$time)`, the last measurement at `r max(pHdata$time)`.
+
+# A first check on the data
+
+## Summary statistics and data distribution
+
+```{r, fig.width=6, fig.height=6}
+summary(pHdata$value)
+hist(pHdata$value, n = 100, main = "RWS pH data density")
+```
+
+## Location of the stations, with indication of the number of data points
+
+```{r, fig.width=6, fig.height=6}
+require(plot3D)
+Numdat <- as.data.frame(sort(table(pHdata$station.code), dec = TRUE))
+names(Numdat) <- c("station.code", "number")
+
+Stfull <- merge(x = Stations, y = Numdat)
+
+with(Stfull, points2D(coord.x, coord.y, colvar = number, pch = 18, 
+  main = "number of pH data points per station"))
+```
+
+## Timeseries plot for data series extending beyond 2010
+
+```{r, fig.width=8, fig.height=8}
+par(mfrow = c(4,4), las = 1, mar = c(3,2,2,2), oma = c(0,2,0,0))
+
+Statsel <- NULL
+for (i in 1:100){
+  st <- Numdat$station.code[i]
+  Dat <- subset(pHdata, station.code == st)
+  if (max(Dat$time) > "2010-01-01 CET"){
+   with (Dat, plot(time, value, main = st, pch = ".", cex = 3, ylim = c(7, 9),
+     ylab = "pH", xlim = as.POSIXct(c("1990-01-01 CET", "2020-07-01 CET"))))
+  Statsel <- rbind(Statsel,subset(Stations, subset = station.code == st))
+    }
+  }
+```
+
+The number of days between first and last data point is estimated.
+
+```{r, fig.width=6, fig.height=6}
+par(oma = c(0,0,0,2))
+Ldata <- tapply(pHdata$time, INDEX = pHdata$station.code, FUN = function(x) diff(range(x)))
+Ldata <- data.frame(station.code =  names(Ldata), timeseries_days = Ldata)
+
+Stats <- merge(Stfull, Ldata)
+
+with(Stats, points2D(coord.x, coord.y, colvar = timeseries_days, 
+     pch = 18, main = "number of days in timeseries"))
+
+with(Statsel, 
+  text2D(coord.x, coord.y, labels = station.code, add = TRUE, cex = 0.5))
+
+```
+
+# Appendix
+
+The stations, with the number of datapoints and the days inbetween first and last datapoints
+
+```{r}
+Toprint <- Stats[,c(3,1,4:7)]
+Toprint[,3] <- as.integer(Toprint[,3])
+Toprint[,6] <- as.integer(Toprint[,6])
+names(Toprint)[5:6] <- c("number", "days")
+knitr:::kable(Toprint)
+
+```
