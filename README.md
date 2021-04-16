@@ -59,13 +59,13 @@ The trend changes observed in pH and oxygen are currently difficult to interpret
 
 Figure 1. (Left) Overview of stations containing pH data points as selected by Provoost *et al*., (2010) and (right) detailed set of pH measurements collected along the Wadden and North Sea stations in these stations.
 
-![oa_figure1](img\oa_figure1.png)
+![oa_figure1](img/oa_figure1.png)
 
 
 
 Figure 2. Overview of oxygen (mg/L) levels measured alongside pH  at some of the same stations covered in Figure 1.
 
-![oa_figure2](img\oa_figure2.png)
+![oa_figure2](img/oa_figure2.png)
 
 
 
